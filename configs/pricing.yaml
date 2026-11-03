@@ -1,0 +1,40 @@
+# USD per 1 juta token. SEMUA harga di bawah UNVERIFIED: berasal dari sumber sekunder
+# (agregator/media). Isi verified_on (YYYY-MM-DD) setelah dicocokkan dengan halaman resmi.
+# Run live menolak harga yang belum terverifikasi atau lebih tua dari max_age_days.
+max_age_days: 30
+output_includes_reasoning: true   # [PROBE] asumsi: completion_tokens sudah mencakup token reasoning
+models:
+  together/llama-3.2-3b-instruct-turbo:
+    provider: together
+    input_per_mtok: 0.06
+    output_per_mtok: 0.06
+    source: https://www.getmaxim.ai/bifrost/llm-cost-calculator/provider/together_ai/model/llama-3.2-3b-instruct-turbo
+    verified_on: null
+    notes: satu agregator lain mencatat N/A
+  together/qwen3.5-9b:
+    provider: together
+    input_per_mtok: 0.10
+    output_per_mtok: 0.15
+    source: https://lava.so/docs/gateway/providers/together
+    verified_on: null
+  together/llama-3-8b-instruct-lite:
+    provider: together
+    input_per_mtok: 0.10
+    output_per_mtok: 0.10
+    source: https://lava.so/docs/gateway/providers/together
+    verified_on: null
+  together/glm-5.3-flash:
+    provider: together
+    input_per_mtok: 0.15
+    output_per_mtok: 0.50
+    cached_input_per_mtok: 0.03
+    source: https://computeprices.com/providers/together-ai/models/glm-5-3-flash
+    verified_on: null
+  openai/gpt-6.1-terra:
+    provider: openai
+    input_per_mtok: 1.00
+    output_per_mtok: 5.00
+    cached_input_per_mtok: 0.05
+    source: https://docs.litellm.ai/blog/gpt-6-1-terra
+    verified_on: null
+    notes: tarif standar; prompt di atas 272K token berbeda; Batch/Flex tidak dipakai

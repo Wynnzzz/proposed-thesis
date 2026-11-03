@@ -1,0 +1,176 @@
+# Konfigurasi terpusat. Penanda:
+#   [D1..D4]      keputusan yang disetujui pengguna (2026-11-01)
+#   [PROVISIONAL] usulan Claude, menunggu konfirmasi pada tinjauan desain
+#   [PROBE]       harus dikonfirmasi oleh scripts/probe_backends.py sebelum run live
+experiment:
+  name: pilot_v0
+  seed: 20261101
+  run_mode: mock            # mock | trace_dev | replay_dev | direct_test
+  results_dir: results
+  data_dir: data
+
+llm:                        # klien HTTP kompatibel OpenAI
+  timeout_s: 120
+  max_retries: 3            # latensi tercatat = total waktu termasuk retry dan backoff
+  backoff_s: 2.0
+
+verification:               # P(True), Pers. II.5
+  max_tokens: 2
+  top_k: 5
+  normalize: yes_over_yes_plus_no   # [PROVISIONAL P9]; logprobs mentah tetap disimpan
+  missing_alternative: zero_with_flag   # Yes atau No di luar top-k dianggap prob 0 dan diberi flag partial
+
+backends:
+  slm:                      # [D1] SLM lewat Together AI (tanpa vLLM lokal)
+    key: slm_llama32_3b
+    provider: together
+    model_id: meta-llama/Llama-3.2-3B-Instruct-Turbo
+    base_url: https://api.together.ai/v1
+    api_key_env: TOGETHER_API_KEY
+    pricing_key: together/llama-3.2-3b-instruct-turbo
+    temperature: 0.0        # [PROVISIONAL] deterministik agar P(True) dapat direproduksi
+    max_tokens: 512
+    extra_body: {}
+    logprobs: {required: true, style: auto, top_k: 5}   # style dipastikan dari probe_report
+    probe_confirmed: false  # [PROBE]
+  agents:                   # heterogen: tiga keluarga model berbeda
+    - key: agent_qwen
+      provider: together
+      model_id: Qwen/Qwen3.5-9B
+      base_url: https://api.together.ai/v1
+      api_key_env: TOGETHER_API_KEY
+      pricing_key: together/qwen3.5-9b
+      temperature: 0.0
+      max_tokens: 512
+      extra_body: {reasoning: {enabled: false}}
+      probe_confirmed: false
+    - key: agent_llama3_8b_lite
+      provider: together
+      model_id: meta-llama/Meta-Llama-3-8B-Instruct-Lite
+      base_url: https://api.together.ai/v1
+      api_key_env: TOGETHER_API_KEY
+      pricing_key: together/llama-3-8b-instruct-lite
+      temperature: 0.0
+      max_tokens: 512
+      extra_body: {}
+      probe_confirmed: false
+    - key: agent_glm
+      provider: together
+      model_id: zai-org/GLM-5.3-Flash
+      base_url: https://api.together.ai/v1
+      api_key_env: TOGETHER_API_KEY
+      pricing_key: together/glm-5.3-flash
+      temperature: 0.0
+      max_tokens: 2048      # [PROBE] model reasoning; mode thinking dan batas token ditentukan dari probe
+      extra_body: {}
+      probe_confirmed: false
+  homogeneous_variant:      # varian S = homogen: N sampel dari satu model [PROVISIONAL]
+    agent_key: agent_qwen
+    temperature: 0.7
+  strong:                   # B2 dan anggota debat lanjutan (varian ablasi)
+    key: strong_gpt
+    provider: openai
+    model_id: gpt-6.1-terra
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    pricing_key: openai/gpt-6.1-terra
+    max_tokens: 1024
+    reasoning_effort: null  # [PROBE] ditetapkan dan dicatat seragam
+    probe_confirmed: false
+
+policy_space:               # theta = (tau1, tau2, tau3, N, R, S)
+  N: [3]                    # 5 agen hanya setelah 5 agen heterogen didefinisikan
+  R: [1, 2, 3]
+  S: [heterogeneous, homogeneous]
+  tau1:                     # P(True); terima jawaban SLM bila p >= tau1
+    method: dev_quantiles
+    quantile_levels: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+    include_sentinels: true # always_accept (tau=-inf), never_accept (tau=+inf)
+    compare: ge
+  tau_disagreement:         # [D4] ruang keputusan diskret, bukan optimisasi kontinu
+    source: achievable_entropy_levels
+    compare: le             # d <= tau, toleransi numerik di bawah
+    require_unique_majority: true      # Algoritma III.1 baris 5 dan 9
+    dedupe_equivalent: true # ambang yang menghasilkan keputusan identik dilebur
+
+entropy:                    # [D4]
+  log_base: e
+  tolerance: 1.0e-4
+  levels:
+    3: [0.0, 0.6365, 1.0986]    # 3-0-0, 2-1-0, 1-1-1
+
+answer_handling:            # [PROVISIONAL] penanganan jawaban invalid
+  invalid_as: singleton_distinct   # tiap jawaban invalid = label unik; tidak pernah membentuk mayoritas
+  slm_invalid: force_escalate      # jawaban SLM invalid: P(True) tidak dipakai, langsung eskalasi
+  final_invalid: count_incorrect   # tidak ada jawaban valid di akhir: dihitung salah
+  tie_break:
+    rule: agent_dev_accuracy_rank  # urutan agen menurut akurasi pada DEV; ditetapkan sebelum test
+    fallback: lexicographic_label
+
+datasets:                   # [D3]
+  mmlu:
+    hf_id: cais/mmlu        # [verifikasi saat unduh]
+    hf_config: all
+    dev_split: validation   # official validation -> development
+    test_split: test       # official test -> test
+    stratify_by: subject
+    allocation: proportional_largest_remainder
+  hotpotqa:
+    hf_id: hotpotqa/hotpot_qa   # [verifikasi saat unduh]
+    hf_config: distractor
+    pool_split: validation  # label test tersembunyi; dev dan test diambil DISJOINT dari pool ini
+  sizes: {pilot: 20, dev: 100, test: 300}
+  pilot_is_subset_of_dev: true      # pilot = 20 pertama dev; test tidak disentuh
+  sample_seed: 20261101
+
+baselines:                  # definisi operasional: docs/DESIGN.md bagian 6
+  b3: {k: 5, temperature: 0.7}      # [PROVISIONAL P1] self-consistency SLM; k ganjil mengurangi seri
+  b5: {tau_from: policy_space.tau1}  # cascade P(True): grid ambang sama dengan tau1
+  oracle: {objective: max_score_then_min_cost_then_min_latency, latency_kind: composed_estimated}
+
+protocol:
+  trace:                    # [D2]
+    collect_splits: [dev]
+    full_trace_rounds: 3
+    store_raw_text: true
+    cache_enabled: true     # cache hanya jika model, prompt, parameter, riwayat identik
+  replay:
+    splits: [dev]
+    latency_kind: composed_estimated
+    coordination_overhead_s: 0.0    # batas bawah; tidak diukur
+  selection:
+    split: dev
+    declared_before_replay: true
+    objective: min_error
+    families: [A3, A1, A2, B4, B5]    # keluarga yang dipilih per skenario (B1-B3 tetap)
+    reference_b4: {N: 3, S: heterogeneous, R: 2}   # [PROVISIONAL P12] B4 acuan untuk batas latensi
+    tie_break: [min_cost, min_latency]
+    scenarios:              # [PROVISIONAL] batas relatif, dinyatakan sebelum melihat hasil
+      - {name: cost_cap_50, max_cost_ratio_vs_B2: 0.50, max_latency_ratio_vs_B4: null}
+      - {name: cost_cap_25, max_cost_ratio_vs_B2: 0.25, max_latency_ratio_vs_B4: null}
+      - {name: latency_cap, max_cost_ratio_vs_B2: null, max_latency_ratio_vs_B4: 0.50}
+  direct:                   # [D2] eksekusi langsung pada test
+    splits: [test]
+    latency_kind: measured_e2e
+    cache_enabled: false
+    latency_repeats: 1      # [PROVISIONAL] naikkan jika anggaran memungkinkan
+    policies: [selected, B1, B2, B3, B4, B5, A1, A2]   # pembanding juga diukur langsung agar latensi sebanding
+  objectives:
+    cost: mean_usd_per_query
+    latency: mean_seconds
+    error: {mmlu: one_minus_accuracy, hotpotqa: one_minus_f1}   # [PROVISIONAL]
+  stats:                    # [D3]
+    bootstrap_resamples: 10000
+    ci_level: 0.95
+    bootstrap_seed: 20261101
+    binary_paired_test: mcnemar
+    continuous_paired_test: paired_bootstrap
+  hypervolume:
+    normalization: dev_union_minmax
+    reference_point_margin: 1.1
+
+budget:
+  pilot_cap_usd: 20.0
+  abort_at_fraction: 0.90
+  dev_cap_usd: null
+  test_cap_usd: null

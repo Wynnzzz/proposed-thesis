@@ -1,0 +1,7 @@
+# Versi belum di-pin: dilakukan (pip freeze) saat lingkungan pengguna dibuat, sebelum pilot.
+pyyaml
+numpy
+scipy
+pandas
+datasets
+matplotlib
